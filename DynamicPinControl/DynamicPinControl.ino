@@ -1,151 +1,152 @@
 #include <SPI.h>
 #include <Wire.h>
 
-static const uint8_t UART2_TX_PIN = 18;
-static const uint8_t SPI_PWM_PIN = 11;
-
-// ADC test pins: A0=PC4 (pin 76), A3=PB1 (pin 79)
-static const uint8_t ADC_TEST_PIN_A0 = A0;
-static const uint8_t ADC_TEST_PIN_A3 = A3;
+// UNO Q (STM32U5) mapping from board DTS:
+// Serial1 TX/RX -> D1/D0 (PB6/PB7)
+// SPI (default bus) -> D13/D12/D11 with CS on D10
+// A4/A5 -> PC1/PC0 and I2C3 on the same pins
+static const uint8_t UART1_TX_PIN = 1;
+static const uint8_t SPI_CLK_PIN = 13;
+static const uint8_t SPI_MOSI_PIN = 11;
+static const uint8_t DIGITAL_TEST_PIN = 4;
 
 static void print_banner() {
-  Serial.println("\n=== GIGA Dynamic PINCTRL test ===");
+  Serial.println("\n=== UNO Q Dynamic PINCTRL test ===");
   Serial.println("Setup:");
-  Serial.println("  - Serial/Logic Analyzer CH1: D18 (UART->GPIO transition)");
-  Serial.println("  - Logic Analyzer CH2: D11 (SPI/PWM/GPIO transitions)");
-  Serial.println("  - Serial/Logic Analyzer CH3: A0->GND, A3->3.3V (ADC/GPIO/ADC transitions)");
+  Serial.println("  - CH1: D1 (Serial1 TX -> GPIO transition)");
+  Serial.println("  - CH2: D13 (SPI SCK -> GPIO -> SPI re-acquire)");
+  Serial.println("  - A4/A5 (PC1/PC0): ADC <-> I2C runtime switch");
+  Serial.println("  - Optional: D4 digital stress toggle");
+}
+
+static void test_digital_toggle() {
+  Serial.println("\n[0] Digital GPIO toggle on D4");
+
+  pinMode(DIGITAL_TEST_PIN, OUTPUT);
+  for (int i = 0; i < 8; i++) {
+    digitalWrite(DIGITAL_TEST_PIN, (i & 0x1) ? HIGH : LOW);
+    delay(40);
+  }
 }
 
 static void test_uart_gpio() {
-  Serial.println("\n[1] UART2 -> GPIO on D18");
-  Serial.println("  Expectation: D18 active during Serial1, then manual GPIO toggle");
+  Serial.println("\n[1] UART (Serial1) -> GPIO on D1");
+  Serial.println("  Expectation: D1 active while Serial1 TX runs, then GPIO pulse on D1");
 
   Serial1.begin(115200);
-  Serial1.println("UART2 active");
-  delay(40);
+  Serial1.println("UNO Q Serial1 active");
+  Serial1.println("Transition to GPIO in 50ms");
+  delay(50);
   Serial1.end();
 
-  pinMode(UART2_TX_PIN, OUTPUT);
-  digitalWrite(UART2_TX_PIN, HIGH);
+  pinMode(UART1_TX_PIN, OUTPUT);
+  digitalWrite(UART1_TX_PIN, HIGH);
   delay(80);
-  digitalWrite(UART2_TX_PIN, LOW);
-}
-
-static void test_spi_pwm_gpio() {
-  Serial.println("\n[2] SPI -> PWM -> GPIO on D11");
-  Serial.println("  Expectation on D11: visible SPI transfer, then PWM waveform, then static GPIO");
-
-  SPI1.begin();
-  SPI1.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
-  for (uint16_t i = 0; i < 10; i++) {
-    (void)SPI1.transfer((uint8_t)i);
-  }
-  SPI1.endTransaction();
-  SPI1.end();
-
-  delay(1000);
-
-  analogWrite(SPI_PWM_PIN, 128);
-  delay(250);
-  analogWrite(SPI_PWM_PIN, 32);
-  delay(250);
-  analogWrite(SPI_PWM_PIN, 0);
-
-  delay(1000);
-
-  pinMode(SPI_PWM_PIN, OUTPUT);
-  digitalWrite(SPI_PWM_PIN, HIGH);
-  delay(100);
-  digitalWrite(SPI_PWM_PIN, LOW);
-}
-
-static void test_adc_gpio_adc_manual() {
-  Serial.println("\n[2] ADC -> GPIO -> ADC on A0/A3 (manual test)");
-  Serial.println("  Expectation: Read A0->GND and A3->3.3V then GPIO toggle, then read A0/A3 again with same expected values");
-  delay(1500);
-
-  int a0_before = analogRead(ADC_TEST_PIN_A0);
-  int a3_before = analogRead(ADC_TEST_PIN_A3);
-  Serial.print("  Before switch: A0=");
-  Serial.print(a0_before);
-  Serial.print(" A3=");
-  Serial.println(a3_before);
-
-  Serial.println("  [MANUAL] DISCONNECT A0/A3 now and connect Logic Analyzer (10s)");
-  delay(10000);
-
-  pinMode(ADC_TEST_PIN_A0, OUTPUT);
-  pinMode(ADC_TEST_PIN_A3, OUTPUT);
-  for (int i = 0; i < 4; i++) {
-    digitalWrite(ADC_TEST_PIN_A0, HIGH);
-    digitalWrite(ADC_TEST_PIN_A3, LOW);
-    delay(60);
-    digitalWrite(ADC_TEST_PIN_A0, LOW);
-    digitalWrite(ADC_TEST_PIN_A3, HIGH);
-    delay(60);
-  }
-
-  Serial.println("  [MANUAL] RECONNECT A0/A3 now (10s)");
-  delay(10000);
-
-  int a0_after = analogRead(ADC_TEST_PIN_A0);
-  int a3_after = analogRead(ADC_TEST_PIN_A3);
-  Serial.print("  After switch:  A0=");
-  Serial.print(a0_after);
-  Serial.print(" A3=");
-  Serial.println(a3_after);
-
-  bool a0_ok = (a0_after < 50);
-  bool a3_ok = (a3_after > 950);
-  Serial.println((a0_ok && a3_ok) ? "  PASS: ADC re-acquired correctly" :
-                                  "  FAIL: ADC value mismatch after pinctrl switch");
+  digitalWrite(UART1_TX_PIN, LOW);
 }
 
 static void test_spi_gpio_spi() {
-  Serial.println("\n[4] SPI -> GPIO -> SPI re-acquire on D11 path");
+  Serial.println("\n[2] SPI -> GPIO -> SPI on D13 path");
+  Serial.println("  Expectation: SPI clocks on D13, then manual GPIO pulse, then SPI clocks again");
 
-  SPI1.begin();
-  SPI1.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+  SPI.begin();
+  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
   for (uint16_t i = 0; i < 10; i++) {
-    (void)SPI1.transfer((uint8_t)(0x30 + (i & 0x0F)));
+    (void)SPI.transfer((uint8_t)(0x30 + (i & 0x0F)));
   }
-  SPI1.endTransaction();
-  SPI1.end();
+  SPI.endTransaction();
+  SPI.end();
 
-  pinMode(SPI_PWM_PIN, OUTPUT);
-  digitalWrite(SPI_PWM_PIN, HIGH);
+  Serial.println("SPI 1 Done");
+  delay(2000);
+
+  pinMode(SPI_MOSI_PIN, OUTPUT);
+  digitalWrite(SPI_MOSI_PIN, HIGH);
   delay(100);
-  digitalWrite(SPI_PWM_PIN, LOW);
+  digitalWrite(SPI_MOSI_PIN, LOW);
 
-  SPI1.begin();
-  SPI1.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+  delay(100);
+
+  SPI.begin();
+  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
   for (uint16_t i = 0; i < 10; i++) {
-    (void)SPI1.transfer((uint8_t)(0xC0 + (i & 0x0F)));
+    (void)SPI.transfer((uint8_t)(0xC0 + (i & 0x0F)));
   }
-  SPI1.endTransaction();
-  SPI1.end();
+  SPI.endTransaction();
+  SPI.end();
+
+  delay(2000);
+
+  pinMode(SPI_MOSI_PIN, OUTPUT);
+  digitalWrite(SPI_MOSI_PIN, HIGH);
+}
+
+static void test_a4a5_analog_i2c() {
+  Serial.println("\n[3] A4/A5 (PC1/PC0) ADC -> I2C -> ADC");
+  delay(1000);
+
+  int a4_before = analogRead(A4);
+  int a5_before = analogRead(A5);
+  Serial.print("  Before I2C: A4=");
+  Serial.print(a4_before);
+  Serial.print(" A5=");
+  Serial.println(a5_before);
+
+  Serial.println("\nRemove A4/A5 connections and start I2C scan on I2C3 bus...");
+  delay(15000);
+
+  Wire2.begin();
+  Wire2.setClock(100000);
+
+  int found = 0;
+  for (uint8_t addr = 8; addr < 120; addr++) {
+    Wire2.beginTransmission(addr);
+    uint8_t err = Wire2.endTransmission();
+    if (err == 0) {
+      found++;
+      Serial.print("  I2C device @0x");
+      if (addr < 16) Serial.print('0');
+      Serial.println(addr, HEX);
+    }
+  }
+  Serial.println("\nI2C devices found on A4/A5 bus: ");
+  Serial.println(found);
+
+  Serial.println("\nRe-attach A4/A5 connections and check ADC levels again...");
+  delay(15000);
+
+  int a4_after = analogRead(A4);
+  int a5_after = analogRead(A5);
+  Serial.print("  After I2C:  A4=");
+  Serial.print(a4_after);
+  Serial.print(" A5=");
+  Serial.println(a5_after);
+
+  bool a4_ok = (a4_after > 900);
+  bool a5_ok = (a5_after < 100);
+  Serial.println((a4_ok && a5_ok)
+                     ? "  PASS: A4/A5 tornati in ADC dopo I2C su PC1/PC0"
+                     : "  WARN: livelli ADC inattesi; verificare cablaggio/manual setup");
 }
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial) {
-    delay(10);
-  }
+  while (!Serial) {};
   print_banner();
 }
 
 void loop() {
+  test_digital_toggle();
+  delay(500);
+
   test_uart_gpio();
-  delay(2500);
-
-  //test_spi_pwm_gpio();
-  //delay(250);
-
-  test_adc_gpio_adc_manual();
-  delay(250);
+  delay(500);
 
   test_spi_gpio_spi();
-  delay(250);
+  delay(500);
+
+  test_a4a5_analog_i2c();
+  delay(500);
 
   Serial.println("\n=== Test cycle complete ===");
 
